@@ -4,6 +4,7 @@
   "description": "",
   "main": "src/app.js",
   "scripts": {
+    "prestart": "npm install",
     "dev": "node src/app.js",
     "build": "echo 'No build step needed'"
   },
