@@ -14,15 +14,18 @@ const messageSchema = new mongoose.Schema(
     },
     text: {
       type: String,
-      trim: true,
+      default: "",
     },
     image: {
       type: String,
+      default: "",
+    },
+    audio: {
+      type: String,
+      default: "",
     },
   },
   { timestamps: true }
 );
 
-const Message = mongoose.model("Message", messageSchema);
-
-export default Message;
+export default mongoose.model("Message", messageSchema);
