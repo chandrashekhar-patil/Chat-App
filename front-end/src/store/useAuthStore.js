@@ -1,17 +1,18 @@
+// front-end/src/store/useAuthStore.js
 import { create } from "zustand";
 import axiosInstance from "../lib/axios";
 import toast from "react-hot-toast";
 import { io } from "socket.io-client";
+import { useChatStore } from "./useChatStore";
 
 export const useAuthStore = create((set, get) => ({
-  user: null,
   authUser: null,
   isSigningUp: false,
   isLoggingIn: false,
   isUpdatingProfile: false,
   isCheckingAuth: true,
   onlineUsers: [],
-  blockedUsers: [], // Add blockedUsers to initial state
+  blockedUsers: [],
   socket: null,
 
   checkAuth: async () => {
@@ -21,7 +22,7 @@ export const useAuthStore = create((set, get) => ({
       console.log("checkAuth - Success:", res.data);
       set({ authUser: res.data });
       get().connectSocket();
-      await get().fetchBlockedUsers(); // Fetch blocked users after auth check
+      await get().fetchBlockedUsers();
     } catch (error) {
       console.error("checkAuth - Error:", {
         message: error.message,
@@ -44,13 +45,18 @@ export const useAuthStore = create((set, get) => ({
       console.log("login - Success:", res.data);
       set({ authUser: res.data });
       get().connectSocket();
-      await get().fetchBlockedUsers(); // Fetch blocked users after login
+      await get().fetchBlockedUsers();
       toast.success("Logged in successfully");
       return res.data;
     } catch (error) {
-      console.error("login - Error:", error.response?.data);
-      toast.error(error.response?.data?.message || "Login failed");
-      throw error;
+      const errorMessage = error.response?.data?.message || "Login failed";
+      console.error("login - Error:", {
+        message: errorMessage,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
+      toast.error(errorMessage);
+      return Promise.reject(new Error(errorMessage));
     } finally {
       set({ isLoggingIn: false });
     }
@@ -63,13 +69,14 @@ export const useAuthStore = create((set, get) => ({
       console.log("signup - Success:", res.data);
       set({ authUser: res.data });
       get().connectSocket();
-      await get().fetchBlockedUsers(); // Fetch blocked users after signup
+      await get().fetchBlockedUsers();
       toast.success("Account created successfully");
       return res.data;
     } catch (error) {
+      const errorMessage = error.response?.data?.message || "Signup failed";
       console.error("signup - Error:", error.response?.data);
-      toast.error(error.response?.data?.message || "Signup failed");
-      throw error;
+      toast.error(errorMessage);
+      return Promise.reject(new Error(errorMessage));
     } finally {
       set({ isSigningUp: false });
     }
@@ -78,9 +85,10 @@ export const useAuthStore = create((set, get) => ({
   logout: async () => {
     try {
       await axiosInstance.post("/auth/logout");
-      set({ authUser: null, blockedUsers: [] }); // Reset blockedUsers on logout
+      set({ authUser: null, blockedUsers: [], onlineUsers: [], socket: null });
       get().disconnectSocket();
       toast.success("Logged out successfully");
+      window.location.href = "/login";
     } catch (error) {
       toast.error(error.response?.data?.message || "Logout failed");
     }
@@ -89,9 +97,10 @@ export const useAuthStore = create((set, get) => ({
   updateProfile: async (data) => {
     set({ isUpdatingProfile: true });
     try {
-      const res = await axiosInstance.put("/auth/update-profile", data);
-      set({ authUser: res.data });
+      const res = await axiosInstance.put("/users/update-profile", data);
+      set((state) => ({ authUser: { ...state.authUser, ...res.data } }));
       toast.success("Profile updated successfully");
+      return res.data;
     } catch (error) {
       toast.error(error.response?.data?.message || "Profile update failed");
       throw error;
@@ -100,23 +109,72 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
+  deleteAccount: async () => {
+    set({ isLoading: true });
+    try {
+      await axiosInstance.delete("/auth/delete-account");
+      set({
+        authUser: null,
+        blockedUsers: [],
+        onlineUsers: [],
+        socket: null,
+        isLoading: false,
+      });
+      get().disconnectSocket();
+      toast.success("Account deleted successfully");
+      window.location.href = "/login";
+    } catch (error) {
+      set({ isLoading: false });
+      const message = error.response?.data?.message || "Failed to delete account";
+      toast.error(message);
+      throw error;
+    }
+  },
+
+  forgotPassword: async (email) => {
+    set({ isRequestingReset: true });
+    try {
+      const res = await axiosInstance.post("/password/forgot", { email });
+      toast.success(res.data.message);
+      return res.data;
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error || "Failed to send reset link";
+      toast.error(errorMessage);
+      return Promise.reject(new Error(errorMessage));
+    } finally {
+      set({ isRequestingReset: false });
+    }
+  },
+
+  resetPassword: async (token, newPassword) => {
+    set({ isResettingPassword: true });
+    try {
+      const res = await axiosInstance.post("/password/reset", {
+        token,
+        new_password: newPassword,
+      });
+      toast.success(res.data.message);
+      return res.data;
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error || "Failed to reset password";
+      toast.error(errorMessage);
+      return Promise.reject(new Error(errorMessage));
+    } finally {
+      set({ isResettingPassword: false });
+    }
+  },
+
   fetchBlockedUsers: async () => {
     try {
-      console.log(
-        "Fetching blocked users from:",
-        `${axiosInstance.defaults.baseURL}/blocked-users`
-      );
       const res = await axiosInstance.get("/blocked-users");
       set({ blockedUsers: res.data.blockedUsers || [] });
       console.log("fetchBlockedUsers - Success:", res.data);
-      console.log(
-        "Fetching blocked users from:",
-        `${axiosInstance.defaults.baseURL}/blocked-users`
-      );
     } catch (error) {
       console.error("fetchBlockedUsers - Error:", error.response?.data);
       set({ blockedUsers: [] });
-      toast.error("Failed to fetch blocked users"); // This toast is triggered
+      toast.error("Failed to fetch blocked users");
     }
   },
 
@@ -132,18 +190,54 @@ export const useAuthStore = create((set, get) => ({
 
   connectSocket: () => {
     const { authUser, socket } = get();
-    if (!authUser || socket?.connected) return;
+    if (!authUser) {
+      console.log("No auth user, cannot connect socket");
+      return;
+    }
+    if (socket?.connected) {
+      console.log("Socket already connected:", socket.id);
+      return;
+    }
 
     const newSocket = io("http://localhost:5000", {
       query: { userId: authUser._id },
       withCredentials: true,
     });
 
-    newSocket.on("connect", () => console.log("Socket connected"));
-    newSocket.on("getOnlineUsers", (userIds) =>
-      set({ onlineUsers: userIds || [] })
-    );
-    newSocket.on("disconnect", () => console.log("Socket disconnected"));
+    newSocket.on("connect", () => {
+      console.log("Socket connected:", newSocket.id);
+    });
+
+    newSocket.on("connect_error", (error) => {
+      console.error("Socket connection error:", error.message);
+      toast.error("Failed to connect to chat server");
+    });
+
+    newSocket.on("getOnlineUsers", (userIds) => {
+      console.log("Online users received:", userIds);
+      set({ onlineUsers: userIds || [] });
+    });
+
+    newSocket.on("disconnect", () => {
+      console.log("Socket disconnected");
+      set({ onlineUsers: [] });
+    });
+
+    newSocket.on("userRemovedFromChat", ({ chatId, userId }) => {
+      console.log(`User ${userId} removed from chat ${chatId}`);
+      useChatStore.getState().removeUserFromChat(chatId, userId);
+      toast.info("A user has left the chat");
+    });
+
+    newSocket.on("userDeleted", ({ userId }) => {
+      console.log(`User ${userId} deleted their account`);
+      set((state) => ({
+        onlineUsers: state.onlineUsers.filter((id) => id !== userId),
+        blockedUsers: state.blockedUsers.filter((id) => id !== userId),
+      }));
+      useChatStore.getState().removeUserFromAllChats(userId);
+      toast.info("A user has deleted their account");
+    });
 
     set({ socket: newSocket });
   },
@@ -151,8 +245,12 @@ export const useAuthStore = create((set, get) => ({
   disconnectSocket: () => {
     const { socket } = get();
     if (socket) {
+      socket.off("getOnlineUsers");
+      socket.off("userRemovedFromChat");
+      socket.off("userDeleted");
       socket.disconnect();
-      set({ socket: null, onlineUsers: [] });
+      set({ socket: null, onlineUsers: [], blockedUsers: [] });
+      console.log("Socket disconnected and state reset");
     }
   },
 }));

@@ -1,8 +1,10 @@
+// back-end/src/controllers/message.controller.js
 import mongoose from "mongoose";
 import User from "../models/users.model.js";
 import Message from "../models/message.model.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import cloudinary from "../lib/cloudinary.js";
+import Chat from "../models/chat.model.js";
 
 export const getUsersForSidebar = async (req, res) => {
   try {
@@ -12,27 +14,56 @@ export const getUsersForSidebar = async (req, res) => {
     }).select("-password");
     res.status(200).json(filteredUsers);
   } catch (error) {
-    console.error("Error in getUsersForSidebar:", error.message);
+    console.error("Error in getUsersForSidebar:", error.message, error.stack);
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
 export const getMessages = async (req, res) => {
   try {
-    const { id: userToChatId } = req.params;
-    const myId = req.user._id;
+    const { id } = req.params;
+    const myId = req.user?._id;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(id) ||
+      !mongoose.Types.ObjectId.isValid(myId)
+    ) {
+      return res.status(400).json({ message: "Invalid ID" });
+    }
+
+    const chat = await Chat.findById(id).populate(
+      "members",
+      "fullName profilePic"
+    );
+    if (chat && chat.isGroupChat) {
+      if (!chat.members.some((m) => m._id.equals(myId))) {
+        return res
+          .status(403)
+          .json({ message: "You are not a member of this group" });
+      }
+      const messages = await Message.find({ chatId: id })
+        .populate("senderId", "fullName profilePic")
+        .sort({ createdAt: 1 })
+        .lean();
+      return res.status(200).json(messages);
+    }
 
     const messages = await Message.find({
       $or: [
-        { senderId: myId, receiverId: userToChatId },
-        { senderId: userToChatId, receiverId: myId },
+        { senderId: myId, receiverId: id },
+        { senderId: id, receiverId: myId },
       ],
-    }).sort({ createdAt: 1 });
+    })
+      .populate("senderId", "fullName profilePic")
+      .sort({ createdAt: 1 })
+      .lean();
 
     res.status(200).json(messages);
   } catch (error) {
-    console.error("Error in getMessages:", error.message);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("Error in getMessages:", error.message, error.stack);
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
   }
 };
 
@@ -44,65 +75,43 @@ export const sendMessage = async (req, res) => {
     let imageUrl = "";
     let audioUrl = "";
 
-    console.log("sendMessage - Endpoint:", req.path);
-    console.log("sendMessage - Request Headers:", req.headers);
-    console.log("sendMessage - Request Body:", req.body);
-    console.log(
-      "sendMessage - Request File:",
-      req.file ? { ...req.file, buffer: "omitted" } : "undefined"
-    );
+    console.log(`Sending message from ${senderId} to ${receiverId}`);
 
-    // Validate ObjectIds
-    if (
-      !mongoose.Types.ObjectId.isValid(senderId) ||
-      !mongoose.Types.ObjectId.isValid(receiverId)
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Invalid senderId or receiverId" });
-    }
-
-    // Check if sender has blocked receiver
     const sender = await User.findById(senderId);
-    if (!sender) {
-      return res.status(404).json({ message: "Sender not found" });
-    }
-    if (sender.blockedUsers && sender.blockedUsers.includes(receiverId)) {
-      return res.status(403).json({ message: "Cannot send message to a blocked user" });
-    }
-
-    // Check if receiver has blocked sender (optional, depending on requirements)
     const receiver = await User.findById(receiverId);
-    if (!receiver) {
-      return res.status(404).json({ message: "Receiver not found" });
-    }
-    if (receiver.blockedUsers && receiver.blockedUsers.includes(senderId)) {
-      return res.status(403).json({ message: "Cannot send message; you are blocked by the recipient" });
+
+    if (!sender || !receiver) {
+      return res.status(404).json({ message: "User not found" });
     }
 
-    // Handle file upload (audio or image workaround)
+    if (sender.blockedUsers.includes(receiverId)) {
+      return res.status(403).json({ message: "You have blocked this user" });
+    }
+    if (receiver.blockedUsers.includes(senderId)) {
+      return res.status(403).json({ message: "This user has blocked you" });
+    }
+
     if (req.file) {
-      console.log("Uploading audio to Cloudinary...", {
+      console.log("Uploading file to Cloudinary...", {
         fileSize: req.file.size,
         mimetype: req.file.mimetype,
       });
       const uploadResponse = await new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
-          { resource_type: "auto", folder: "chat_audio" },
+          {
+            resource_type: req.file.mimetype.startsWith("image/")
+              ? "image"
+              : "auto",
+            folder: req.file.mimetype.startsWith("image/")
+              ? "chat_images"
+              : "chat_audio",
+          },
           (error, result) => {
-            if (error) {
-              console.error("Cloudinary Upload Error:", error.message, error);
-              reject(error);
-            } else {
-              console.log("Cloudinary Upload Success:", result.secure_url);
-              resolve(result);
-            }
+            if (error) reject(error);
+            else resolve(result);
           }
         );
-        stream.on("error", (err) => {
-          console.error("Stream Error:", err.message);
-          reject(err);
-        });
+        stream.on("error", reject);
         if (req.file.buffer && req.file.buffer.length > 0) {
           stream.write(req.file.buffer);
           stream.end();
@@ -110,41 +119,160 @@ export const sendMessage = async (req, res) => {
           reject(new Error("Empty file buffer"));
         }
       });
-      audioUrl = uploadResponse.secure_url;
-    } else if (!text) {
+
+      if (req.file.mimetype.startsWith("image/")) {
+        imageUrl = uploadResponse.secure_url;
+      } else {
+        audioUrl = uploadResponse.secure_url;
+      }
+    }
+
+    if (!text && !imageUrl && !audioUrl) {
       return res
         .status(400)
-        .json({ message: "Message must contain text or audio" });
+        .json({ message: "Message must contain text, image, or audio" });
     }
 
     const newMessage = new Message({
       senderId,
       receiverId,
       text: text || "",
-      image: imageUrl,
+      image: imageUrl || undefined,
       audio: audioUrl || undefined,
     });
 
-    console.log("Saving new message:", newMessage.toObject());
     const savedMessage = await newMessage.save();
-    console.log("Message saved successfully:", savedMessage._id);
+    const populatedMessage = await Message.findById(savedMessage._id)
+      .populate("senderId", "fullName profilePic")
+      .lean();
 
     const receiverSocketId = getReceiverSocketId(receiverId);
+    const senderSocketId = getReceiverSocketId(senderId.toString());
+
     if (receiverSocketId) {
-      console.log("Emitting to receiver:", receiverSocketId);
-      io.to(receiverSocketId).emit("newMessage", savedMessage);
-    }
-    const senderSocketId = getReceiverSocketId(senderId);
-    if (senderSocketId) {
-      console.log("Emitting to sender:", senderSocketId);
-      io.to(senderSocketId).emit("newMessage", savedMessage);
+      io.to(receiverSocketId).emit("newMessage", populatedMessage);
+      io.to(receiverSocketId).emit("notification", {
+        type: "message",
+        message: `New message from ${sender.fullName}`,
+        from: senderId,
+        content: text || (imageUrl ? "Image" : "Audio"),
+        timestamp: new Date(),
+      });
+      console.log(`Notification emitted to receiver ${receiverId}`);
     }
 
-    res.status(201).json(savedMessage);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit("newMessage", populatedMessage);
+    }
+
+    res.status(201).json(populatedMessage);
   } catch (error) {
     console.error("Error in sendMessage:", error.message, error.stack);
     res
       .status(500)
       .json({ message: "Failed to send message", error: error.message });
+  }
+};
+
+export const sendGroupMessage = async (req, res) => {
+  try {
+    const { text } = req.body || {};
+    const { chatId } = req.params;
+    const senderId = req.user._id;
+    let audioUrl = "";
+    let imageUrl = "";
+
+    if (!mongoose.Types.ObjectId.isValid(chatId)) {
+      return res.status(400).json({ message: "Invalid chat ID" });
+    }
+
+    const chat = await Chat.findById(chatId).populate(
+      "members",
+      "fullName profilePic"
+    );
+    if (!chat || !chat.isGroupChat) {
+      return res.status(404).json({ message: "Group chat not found" });
+    }
+
+    if (!chat.members.some((m) => m._id.equals(senderId))) {
+      return res
+        .status(403)
+        .json({ message: "You are not a member of this group" });
+    }
+
+    if (req.file) {
+      const uploadResponse = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: req.file.mimetype.startsWith("image/")
+              ? "image"
+              : "auto",
+            folder: req.file.mimetype.startsWith("image/")
+              ? "chat_images"
+              : "chat_audio",
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        stream.on("error", reject);
+        if (req.file.buffer && req.file.buffer.length > 0) {
+          stream.write(req.file.buffer);
+          stream.end();
+        } else {
+          reject(new Error("Empty file buffer"));
+        }
+      });
+
+      if (req.file.mimetype.startsWith("image/")) {
+        imageUrl = uploadResponse.secure_url;
+      } else {
+        audioUrl = uploadResponse.secure_url;
+      }
+    }
+
+    if (!text && !audioUrl && !imageUrl) {
+      return res
+        .status(400)
+        .json({ message: "Message must contain text, image, or audio" });
+    }
+
+    const newMessage = new Message({
+      chatId,
+      senderId,
+      text: text || "",
+      image: imageUrl || undefined,
+      audio: audioUrl || undefined,
+    });
+
+    const savedMessage = await newMessage.save();
+    const populatedMessage = await Message.findById(savedMessage._id)
+      .populate("senderId", "fullName profilePic")
+      .lean();
+
+    const sender = await User.findById(senderId);
+    chat.members.forEach((member) => {
+      const memberSocketId = getReceiverSocketId(member._id.toString());
+      if (memberSocketId && !member._id.equals(senderId)) {
+        io.to(memberSocketId).emit("newMessage", populatedMessage);
+        io.to(memberSocketId).emit("notification", {
+          type: "group_message",
+          message: `New message in ${chat.name} from ${sender.fullName}`,
+          from: senderId,
+          content: text || (imageUrl ? "Image" : "Audio"),
+          chatId,
+          timestamp: new Date(),
+        });
+        console.log(`Notification emitted to member ${member._id}`);
+      }
+    });
+
+    res.status(201).json(populatedMessage);
+  } catch (error) {
+    console.error("Error in sendGroupMessage:", error.message, error.stack);
+    res
+      .status(500)
+      .json({ message: "Failed to send group message", error: error.message });
   }
 };

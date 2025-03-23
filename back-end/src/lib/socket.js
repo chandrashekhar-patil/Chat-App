@@ -1,4 +1,6 @@
+// back-end/src/lib/socket.js
 import { Server } from "socket.io";
+import mongoose from "mongoose";
 import http from "http";
 import express from "express";
 
@@ -6,46 +8,54 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://192.168.1.64:5173"],
+    origin: ["http://localhost:5173"],
+    methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
-const userSocketMap = {}; // userId -> socketId
+const userSocketMap = {};
 
-// Utility to get socket ID by user ID
 const getReceiverSocketId = (receiverId) => {
   const socketId = userSocketMap[receiverId];
-  console.log(`getReceiverSocketId(${receiverId}) -> ${socketId || "undefined"}`);
+  if (!socketId) {
+    console.log(`No socket found for user ${receiverId}`);
+  }
   return socketId;
 };
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
-
-  // Register user ID from query
   const userId = socket.handshake.query.userId;
-  if (userId && userId !== "undefined" && userId.match(/^[0-9a-fA-F]{24}$/)) {
+
+  if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+    if (userSocketMap[userId]) {
+      console.log(
+        `User ${userId} already connected, disconnecting old socket: ${userSocketMap[userId]}`
+      );
+      io.sockets.sockets.get(userSocketMap[userId])?.disconnect();
+    }
     userSocketMap[userId] = socket.id;
-    console.log(`Mapped user ${userId} to socket ${socket.id}`);
-    console.log("Current userSocketMap:", userSocketMap);
+    console.log(`Updated userSocketMap:`, userSocketMap);
+    io.emit("getOnlineUsers", Object.keys(userSocketMap));
   } else {
-    console.warn("Invalid or missing userId:", userId);
+    console.log("Invalid userId received during socket connection:", userId);
   }
 
-  // Emit online users to all connected clients
-  io.emit("getOnlineUsers", Object.keys(userSocketMap));
-
-  // Call Signaling Events (unchanged)
+  // Call events
   socket.on("call", ({ from, to, channel }) => {
     const receiverSocketId = getReceiverSocketId(to);
     if (receiverSocketId) {
       io.to(receiverSocketId).emit("incoming_call", { from, channel });
       socket.emit("call_initiated", { to });
-      console.log(`Call initiated from ${from} to ${to} on channel ${channel}`);
+      io.to(receiverSocketId).emit("notification", {
+        type: "call",
+        message: `Incoming call from ${from}`,
+        from,
+        timestamp: new Date(),
+      });
     } else {
       socket.emit("call_error", { message: "User not found or offline" });
-      console.log(`Call failed: User ${to} not found`);
     }
   });
 
@@ -53,7 +63,12 @@ io.on("connection", (socket) => {
     const callerSocketId = getReceiverSocketId(to);
     if (callerSocketId) {
       io.to(callerSocketId).emit("call_accepted", { from, channel });
-      console.log(`Call accepted by ${from} for ${to}`);
+      io.to(callerSocketId).emit("notification", {
+        type: "call_accepted",
+        message: `${from} accepted your call`,
+        from,
+        timestamp: new Date(),
+      });
     }
   });
 
@@ -61,22 +76,26 @@ io.on("connection", (socket) => {
     const callerSocketId = getReceiverSocketId(to);
     if (callerSocketId) {
       io.to(callerSocketId).emit("call_rejected", { from });
-      console.log(`Call rejected by ${from} for ${to}`);
+      io.to(callerSocketId).emit("notification", {
+        type: "call_rejected",
+        message: `${from} rejected your call`,
+        from,
+        timestamp: new Date(),
+      });
     }
   });
 
-  // Handle disconnection
+  // Disconnect
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
     for (const [key, value] of Object.entries(userSocketMap)) {
       if (value === socket.id) {
         delete userSocketMap[key];
-        console.log(`Removed user ${key} from userSocketMap`);
+        console.log(`Removed user ${key} from userSocketMap:`, userSocketMap);
+        io.emit("getOnlineUsers", Object.keys(userSocketMap));
         break;
       }
     }
-    console.log("Updated userSocketMap:", userSocketMap);
-    io.emit("getOnlineUsers", Object.keys(userSocketMap));
   });
 });
 

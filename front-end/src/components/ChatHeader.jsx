@@ -1,3 +1,4 @@
+// front-end/src/components/ChatHeader.jsx
 import {
   IoChevronBack,
   IoEllipsisVertical,
@@ -21,13 +22,36 @@ import axiosInstance from "../lib/axios";
 import toast from "react-hot-toast";
 import AgoraRTC from "agora-rtc-sdk-ng";
 import ProfileModal from "./ProfileModal";
+import GroupInfoModal from "./GroupInfoModal";
 import { Menu, MenuItem, IconButton, Typography } from "@mui/material";
+import { FcVideoCall } from "react-icons/fc";
+
+// Request Notification Permission
+const requestNotificationPermission = () => {
+  if (!("Notification" in window)) {
+    console.log("This browser does not support desktop notifications");
+    return;
+  }
+  if (
+    Notification.permission !== "granted" &&
+    Notification.permission !== "denied"
+  ) {
+    Notification.requestPermission().then((permission) => {
+      if (permission === "granted") {
+        console.log("Notification permission granted");
+      } else {
+        console.log("Notification permission denied");
+      }
+    });
+  }
+};
 
 const ChatHeader = ({ selectedUser }) => {
-  const { authUser, onlineUsers, blockedUsers, socket } = useAuthStore(); // Use global socket from useAuthStore
+  const { authUser, onlineUsers, blockedUsers, socket } = useAuthStore();
   const { setSelectedUser, clearChatMessages } = useChatStore();
   const [menuAnchorEl, setMenuAnchorEl] = useState(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   const [callType, setCallType] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -46,27 +70,46 @@ const ChatHeader = ({ selectedUser }) => {
   const [localAudioTrack, setLocalAudioTrack] = useState(null);
   const [localVideoTrack, setLocalVideoTrack] = useState(null);
 
-  // Use the global socket from useAuthStore for real-time events
   useEffect(() => {
-    if (!authUser || !socket) {
-      console.log("Auth user or socket not available, skipping event setup");
-      return;
-    }
+    // Request notification permission on component mount
+    requestNotificationPermission();
 
-    console.log("ChatHeader using socket ID:", socket.id);
+    if (!authUser || !socket) return;
 
     socket.on("incoming_call", (data) => {
-      setIncomingCall({ from: data.from, channel: data.channel });
-      toast(
-        `Incoming ${callType || "video"} call from ${
-          selectedUser?.fullName || "Unknown"
-        }`,
-        { duration: 10000 }
-      );
+      if (
+        data.from === selectedUser?._id &&
+        !blockedUsers.includes(data.from)
+      ) {
+        setIncomingCall({ from: data.from, channel: data.channel });
+        if (Notification.permission === "granted") {
+          const notification = new Notification(
+            `Incoming ${callType || "Video"} Call`,
+            {
+              body: `From ${selectedUser?.fullName || "Unknown"}`,
+              icon: selectedUser?.profilePic || "/avatar.png",
+              tag: `call-${data.from}`,
+            }
+          );
+          notification.onclick = () => window.focus(); // Focus window on click
+          const audio = new Audio("/notification.mp3"); // Add sound file in public folder
+          audio.play().catch((err) => console.error("Audio play error:", err));
+        }
+        toast(
+          `Incoming ${callType || "video"} call from ${
+            selectedUser?.fullName || "Unknown"
+          }`,
+          {
+            duration: 10000,
+          }
+        );
+      }
     });
 
     socket.on("call_accepted", (data) => {
-      startCall(callType);
+      if (data.from === selectedUser?._id) {
+        startCall(callType);
+      }
     });
 
     socket.on("call_rejected", () => {
@@ -81,14 +124,41 @@ const ChatHeader = ({ selectedUser }) => {
       setCallType(null);
     });
 
-    socket.on("getOnlineUsers", (users) => {
-      console.log("Online users updated:", users);
-    });
-
     socket.on("chatCleared", ({ userId }) => {
       if (selectedUser?._id === userId) {
         clearChatMessages(userId);
-        toast.success("Chat has been cleared");
+        toast.success("Chat has been cleared, group remains active");
+      }
+    });
+
+    socket.on("newMessage", (message) => {
+      if (
+        (message.senderId._id === selectedUser?._id &&
+          message.receiverId === authUser._id) ||
+        message.chatId === selectedUser?._id
+      ) {
+        if (!blockedUsers.includes(message.senderId._id)) {
+          const senderName = message.senderId.fullName || "Unknown";
+          const content = message.text || (message.image ? "Image" : "Audio");
+          if (Notification.permission === "granted" && document.hidden) {
+            const notification = new Notification(
+              `New Message from ${senderName}`,
+              {
+                body: content,
+                icon: message.senderId.profilePic || "/avatar.png",
+                tag: message._id,
+              }
+            );
+            notification.onclick = () => window.focus();
+            const audio = new Audio("/notification.mp3");
+            audio
+              .play()
+              .catch((err) => console.error("Audio play error:", err));
+          }
+          toast(`New message from ${senderName}: ${content}`, {
+            duration: 5000,
+          });
+        }
       }
     });
 
@@ -97,51 +167,65 @@ const ChatHeader = ({ selectedUser }) => {
       socket.off("call_accepted");
       socket.off("call_rejected");
       socket.off("call_error");
-      socket.off("getOnlineUsers");
       socket.off("chatCleared");
+      socket.off("newMessage");
     };
-  }, [authUser, socket, callType, selectedUser, clearChatMessages]);
+  }, [
+    authUser,
+    socket,
+    callType,
+    selectedUser,
+    clearChatMessages,
+    blockedUsers,
+  ]);
 
-  if (!authUser || !selectedUser) {
-    return null;
-  }
+  if (!authUser || !selectedUser) return null;
 
-  const isOnline = onlineUsers.includes(selectedUser._id);
-  const isBlocked = blockedUsers.includes(selectedUser._id);
+  const isGroupChat = selectedUser.isGroupChat;
+  const isOnline = !isGroupChat && onlineUsers.includes(selectedUser._id);
+  const isBlocked = !isGroupChat && blockedUsers.includes(selectedUser._id);
   const showOnlineStatus = isOnline && !isBlocked;
 
-  let lastSeenText = null;
-  if (!isOnline && selectedUser.updatedAt && !isBlocked) {
-    try {
-      lastSeenText = `last seen ${formatDistanceToNow(
-        new Date(selectedUser.updatedAt),
-        { addSuffix: true }
-      )}`;
-    } catch (error) {
-      console.error("Error formatting last seen:", error);
-      lastSeenText = "offline";
-    }
-  } else if (!isOnline && !selectedUser.updatedAt && !isBlocked) {
-    lastSeenText = "offline";
+  let statusText = "";
+  if (isGroupChat) {
+    statusText = `${selectedUser.members.length} members`;
+  } else if (!isOnline && selectedUser.updatedAt && !isBlocked) {
+    statusText = `last seen ${formatDistanceToNow(
+      new Date(selectedUser.updatedAt),
+      { addSuffix: true }
+    )}`;
+  } else if (!isOnline && !isBlocked) {
+    statusText = "offline";
+  } else if (showOnlineStatus) {
+    statusText = "online";
+  } else if (isBlocked) {
+    statusText = "blocked";
   }
 
   const handleClearChat = async () => {
     if (!selectedUser?._id) {
-      toast.error("No user selected to clear chat");
+      toast.error("No chat selected to clear");
       return;
     }
     try {
-      await axiosInstance.post(`/clear-chat/${selectedUser._id}`);
+      const endpoint = isGroupChat
+        ? `/group-chats/${selectedUser._id}/clear`
+        : `/clear-chat/${selectedUser._id}`;
+      await axiosInstance.post(endpoint);
       clearChatMessages(selectedUser._id);
       toast.success("Chat cleared successfully");
       setMenuAnchorEl(null);
     } catch (error) {
-      console.error("Error clearing chat:", error);
       toast.error(error.response?.data?.message || "Failed to clear chat");
     }
   };
 
   const handleBlockUser = async () => {
+    if (isGroupChat) {
+      toast.info("Blocking is not applicable to groups");
+      setMenuAnchorEl(null);
+      return;
+    }
     try {
       await axiosInstance.post(`/block/${selectedUser._id}`);
       useAuthStore.setState((state) => ({
@@ -150,12 +234,16 @@ const ChatHeader = ({ selectedUser }) => {
       toast.success(`${selectedUser.fullName} has been blocked`);
       setMenuAnchorEl(null);
     } catch (error) {
-      console.error("Error blocking user:", error);
       toast.error(error.response?.data?.message || "Failed to block user");
     }
   };
 
   const handleUnblockUser = async () => {
+    if (isGroupChat) {
+      toast.info("Unblocking is not applicable to groups");
+      setMenuAnchorEl(null);
+      return;
+    }
     try {
       await axiosInstance.post(`/unblock/${selectedUser._id}`);
       useAuthStore.setState((state) => ({
@@ -166,7 +254,6 @@ const ChatHeader = ({ selectedUser }) => {
       toast.success(`${selectedUser.fullName} has been unblocked`);
       setMenuAnchorEl(null);
     } catch (error) {
-      console.error("Error unblocking user:", error);
       toast.error(error.response?.data?.message || "Failed to unblock user");
     }
   };
@@ -177,18 +264,46 @@ const ChatHeader = ({ selectedUser }) => {
   };
 
   const handleReportUser = () => {
-    toast.info("Report user feature is not implemented yet.");
+    if (isGroupChat) {
+      toast.info("Reporting a group is not implemented yet.");
+    } else {
+      toast.info("Report user feature is not implemented yet.");
+    }
     setMenuAnchorEl(null);
   };
 
-  const startCall = async (type) => {
-    if (!APP_ID || !CHANNEL) {
-      toast.error("Agora configuration is missing.");
+  const initiateCall = (type) => {
+    if (isGroupChat) {
+      toast.info("Calls are not supported for group chats yet.");
       return;
     }
-    if (isBlocked || isCalling) {
+    if (!socket || !selectedUser?._id || isBlocked) {
       toast.error(
-        isBlocked ? "Cannot call a blocked user" : "Already in a call"
+        isBlocked
+          ? "Cannot call a blocked user"
+          : "Socket or user not available"
+      );
+      return;
+    }
+    socket.emit("call", {
+      from: authUser._id,
+      to: selectedUser._id,
+      channel: CHANNEL,
+    });
+    setIsCalling(true);
+    setCallType(type);
+  };
+
+  const startCall = async (type) => {
+    if (isGroupChat || !APP_ID || !CHANNEL || isBlocked || isCalling) {
+      toast.error(
+        isGroupChat
+          ? "Calls not supported for groups"
+          : !APP_ID || !CHANNEL
+          ? "Agora configuration missing"
+          : isBlocked
+          ? "Cannot call a blocked user"
+          : "Already in a call"
       );
       return;
     }
@@ -214,26 +329,21 @@ const ChatHeader = ({ selectedUser }) => {
         toast.success(`Video call started with ${selectedUser.fullName}`);
       }
     } catch (error) {
-      console.error(`${type} call error:`, error);
       toast.error(`Failed to start ${type} call`);
       setIsCalling(false);
       setCallType(null);
     }
   };
 
-  const initiateCall = (type) => {
-    if (!socket) return;
-    socket.emit("call", {
-      from: authUser._id,
-      to: selectedUser._id,
-      channel: CHANNEL,
-    });
-    setIsCalling(true);
-    setCallType(type);
-  };
-
   const acceptCall = () => {
-    if (!socket || !incomingCall) return;
+    if (!socket || !incomingCall || isBlocked) {
+      toast.error(
+        isBlocked
+          ? "Cannot accept call from a blocked user"
+          : "Socket or call not available"
+      );
+      return;
+    }
     socket.emit("accept_call", {
       from: authUser._id,
       to: incomingCall.from,
@@ -265,7 +375,6 @@ const ChatHeader = ({ selectedUser }) => {
       setIsMuted(false);
       toast.success("Call ended");
     } catch (error) {
-      console.error("Error ending call:", error);
       toast.error("Failed to end call");
     }
   };
@@ -309,7 +418,6 @@ const ChatHeader = ({ selectedUser }) => {
         setIsFrontCamera(!isFrontCamera);
         toast.success(`Switched to ${isFrontCamera ? "back" : "front"} camera`);
       } catch (error) {
-        console.error("Error swapping camera:", error);
         toast.error("Failed to swap camera");
       }
     }
@@ -343,58 +451,70 @@ const ChatHeader = ({ selectedUser }) => {
           </button>
           <div
             className="flex items-center gap-3 cursor-pointer"
-            onClick={() => setShowProfileModal(true)}
+            onClick={() =>
+              isGroupChat
+                ? setShowGroupInfoModal(true)
+                : setShowProfileModal(true)
+            }
           >
             <div className="relative">
-              <img
-                src={selectedUser.profilePic || "/avatar.png"}
-                alt={selectedUser.fullName}
-                className="w-10 h-10 rounded-full object-cover"
-              />
+              {isGroupChat ? (
+                <div className="w-10 h-10 bg-gray-600 rounded-full flex items-center justify-center">
+                  <span className="text-white text-lg">
+                    {selectedUser.name[0].toUpperCase()}
+                  </span>
+                </div>
+              ) : (
+                <img
+                  src={selectedUser.profilePic || "/avatar.png"}
+                  alt={selectedUser.fullName}
+                  className="w-10 h-10 rounded-full object-cover"
+                />
+              )}
               {showOnlineStatus && (
                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white" />
               )}
             </div>
             <div>
               <h3 className="text-gray-800 font-medium truncate max-w-[150px] md:max-w-[250px]">
-                {selectedUser.fullName}
+                {isGroupChat ? selectedUser.name : selectedUser.fullName}
               </h3>
               <p
                 className={`text-sm ${
                   showOnlineStatus ? "text-green-500" : "text-gray-500"
                 }`}
               >
-                {isCalling
-                  ? "Calling..."
-                  : showOnlineStatus
-                  ? "online"
-                  : lastSeenText}
+                {isCalling ? "Calling..." : statusText}
               </p>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
-          <IconButton
-            onClick={() => initiateCall("voice")}
-            className={`text-gray-600 hover:bg-gray-100 focus:bg-gray-200 rounded-full transition-all duration-200 transform hover:scale-105 focus:scale-105 ${
-              isBlocked || isCalling ? "opacity-50 cursor-not-allowed" : ""
-            }`}
-            disabled={isBlocked || isCalling}
-            title="Voice Call"
-          >
-            <IoCall size={24} />
-          </IconButton>
-          <IconButton
-            onClick={() => initiateCall("video")}
-            className={`text-gray-600 hover:bg-gray-100 focus:bg-gray-200 rounded-full transition-all duration-200 transform hover:scale-105 focus:scale-105 ${
-              isBlocked || isCalling ? "opacity-50 cursor-not-allowed" : ""
-            }`}
-            disabled={isBlocked || isCalling}
-            title="Video Call"
-          >
-            <IoVideocam size={24} />
-          </IconButton>
+          {!isGroupChat && (
+            <>
+              <IconButton
+                onClick={() => initiateCall("voice")}
+                className={`text-gray-600 hover:bg-gray-100 focus:bg-gray-200 rounded-full transition-all duration-200 transform hover:scale-105 focus:scale-105 ${
+                  isBlocked || isCalling ? "opacity-50 cursor-not-allowed" : ""
+                }`}
+                disabled={isBlocked || isCalling}
+                title="Voice Call"
+              >
+                <IoCall size={24} />
+              </IconButton>
+              <IconButton
+                onClick={() => initiateCall("video")}
+                className={`text-gray-600 hover:bg-gray-100 focus:bg-gray-200 rounded-full transition-all duration-200 transform hover:scale-105 focus:scale-105 ${
+                  isBlocked || isCalling ? "opacity-50 cursor-not-allowed" : ""
+                }`}
+                disabled={isBlocked || isCalling}
+                title="Video Call"
+              >
+                <FcVideoCall size={24} />
+              </IconButton>
+            </>
+          )}
           <IconButton
             onClick={(e) => setMenuAnchorEl(e.currentTarget)}
             className="text-gray-600 hover:bg-gray-100 focus:bg-gray-200 rounded-full transition-all duration-200 transform hover:scale-105 focus:scale-105"
@@ -423,7 +543,9 @@ const ChatHeader = ({ selectedUser }) => {
           >
             <MenuItem
               onClick={() => {
-                setShowProfileModal(true);
+                isGroupChat
+                  ? setShowGroupInfoModal(true)
+                  : setShowProfileModal(true);
                 setMenuAnchorEl(null);
               }}
               sx={{
@@ -434,42 +556,46 @@ const ChatHeader = ({ selectedUser }) => {
               }}
             >
               <IoPersonCircleOutline size={20} />
-              View Profile
+              {isGroupChat ? "Group Info" : "View Profile"}
             </MenuItem>
-            <MenuItem
-              onClick={() => {
-                initiateCall("voice");
-                setMenuAnchorEl(null);
-              }}
-              disabled={isBlocked || isCalling}
-              sx={{
-                gap: 2,
-                color: "gray.700",
-                "&:hover": { bgcolor: "gray.100" },
-                "&:focus": { bgcolor: "gray.200" },
-                opacity: isBlocked || isCalling ? 0.5 : 1,
-              }}
-            >
-              <IoCall size={20} />
-              Voice Call
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                initiateCall("video");
-                setMenuAnchorEl(null);
-              }}
-              disabled={isBlocked || isCalling}
-              sx={{
-                gap: 2,
-                color: "gray.700",
-                "&:hover": { bgcolor: "gray.100" },
-                "&:focus": { bgcolor: "gray.200" },
-                opacity: isBlocked || isCalling ? 0.5 : 1,
-              }}
-            >
-              <IoVideocam size={20} />
-              Video Call
-            </MenuItem>
+            {!isGroupChat && (
+              <>
+                <MenuItem
+                  onClick={() => {
+                    initiateCall("voice");
+                    setMenuAnchorEl(null);
+                  }}
+                  disabled={isBlocked || isCalling}
+                  sx={{
+                    gap: 2,
+                    color: "gray.700",
+                    "&:hover": { bgcolor: "gray.100" },
+                    "&:focus": { bgcolor: "gray.200" },
+                    opacity: isBlocked || isCalling ? 0.5 : 1,
+                  }}
+                >
+                  <IoCall size={20} />
+                  Voice Call
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    initiateCall("video");
+                    setMenuAnchorEl(null);
+                  }}
+                  disabled={isBlocked || isCalling}
+                  sx={{
+                    gap: 2,
+                    color: "gray.700",
+                    "&:hover": { bgcolor: "gray.100" },
+                    "&:focus": { bgcolor: "gray.200" },
+                    opacity: isBlocked || isCalling ? 0.5 : 1,
+                  }}
+                >
+                  <IoVideocam size={20} />
+                  Video Call
+                </MenuItem>
+              </>
+            )}
             <MenuItem
               onClick={handleClearChat}
               sx={{
@@ -504,21 +630,23 @@ const ChatHeader = ({ selectedUser }) => {
               }}
             >
               <IoFlag size={20} />
-              Report User
+              Report {isGroupChat ? "Group" : "User"}
             </MenuItem>
-            <MenuItem
-              onClick={isBlocked ? handleUnblockUser : handleBlockUser}
-              sx={{
-                gap: 2,
-                color: "red.600",
-                "&:hover": { bgcolor: "red.50" },
-                "&:focus": { bgcolor: "red.100" },
-              }}
-            >
-              <IoBan size={20} />
-              {isBlocked ? "Unblock" : "Block"}
-            </MenuItem>
-            {isCalling && (
+            {!isGroupChat && (
+              <MenuItem
+                onClick={isBlocked ? handleUnblockUser : handleBlockUser}
+                sx={{
+                  gap: 2,
+                  color: "red.600",
+                  "&:hover": { bgcolor: "red.50" },
+                  "&:focus": { bgcolor: "red.100" },
+                }}
+              >
+                <IoBan size={20} />
+                {isBlocked ? "Unblock" : "Block"}
+              </MenuItem>
+            )}
+            {isCalling && !isGroupChat && (
               <MenuItem
                 onClick={endCall}
                 sx={{
@@ -538,7 +666,7 @@ const ChatHeader = ({ selectedUser }) => {
       </motion.div>
 
       <AnimatePresence>
-        {isCalling && (
+        {isCalling && !isGroupChat && (
           <motion.div
             className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-70 z-50"
             variants={popupVariants}
@@ -549,13 +677,17 @@ const ChatHeader = ({ selectedUser }) => {
             <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
               <div className="flex flex-col items-center gap-4">
                 {callType === "video" && (
-                  <div className="w-full h-64 bg-gray-800 rounded-lg overflow-hidden shadow-inner">
-                    <div ref={remoteVideoRef} className="w-full h-full" />
-                  </div>
-                )}
-                {callType === "video" && (
-                  <div className="absolute bottom-24 right-8 w-28 h-36 bg-gray-700 rounded-lg overflow-hidden shadow-md">
-                    <div ref={localVideoRef} className="w-full h-full" />
+                  <div className="w-full h-64 bg-gray-800 rounded-lg overflow-hidden shadow-inner relative">
+                    <div
+                      ref={remoteVideoRef}
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute bottom-4 right-4 w-28 h-36 bg-gray-700 rounded-lg overflow-hidden shadow-md">
+                      <div
+                        ref={localVideoRef}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
                   </div>
                 )}
                 <div className="text-center">
@@ -592,10 +724,10 @@ const ChatHeader = ({ selectedUser }) => {
                   </IconButton>
                   <IconButton
                     onClick={endCall}
-                    className="p-3 bg-red-600 rounded-full hover:bg-red-700 focus:bg-red-800 transition-colors duration-200"
+                    className="p-4 bg-red-600 text-white rounded-full hover:bg-red-700 focus:bg-red-800 focus:bg-red-800 transition-colors duration-200 shadow-md"
                     title="End Call"
                   >
-                    <IoCall size={24} className="rotate-135 text-white" />
+                    <IoCall size={24} className="rotate-135 text-red" />
                   </IconButton>
                 </div>
               </div>
@@ -605,7 +737,7 @@ const ChatHeader = ({ selectedUser }) => {
       </AnimatePresence>
 
       <AnimatePresence>
-        {incomingCall && (
+        {incomingCall && !isGroupChat && !isBlocked && (
           <motion.div
             className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-70 z-50"
             variants={popupVariants}
@@ -644,10 +776,16 @@ const ChatHeader = ({ selectedUser }) => {
         )}
       </AnimatePresence>
 
-      {showProfileModal && (
+      {showProfileModal && !isGroupChat && (
         <ProfileModal
           user={selectedUser}
           onClose={() => setShowProfileModal(false)}
+        />
+      )}
+      {showGroupInfoModal && isGroupChat && (
+        <GroupInfoModal
+          group={selectedUser}
+          onClose={() => setShowGroupInfoModal(false)}
         />
       )}
     </>

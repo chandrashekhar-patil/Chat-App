@@ -1,12 +1,18 @@
+// back-end/src/app.js
 import { config } from "dotenv";
 import { connectDB } from "./lib/db.js";
 import authRoutes from "./routes/auth.route.js";
 import messageRoutes from "./routes/message.route.js";
-import chatRoutes from "./routes/chat.route.js.js"
+import chatRoutes from "./routes/chat.route.js";
 import cookieParser from "cookie-parser";
 import express from "express";
 import cors from "cors";
-import { app, server, io } from "./lib/socket.js"; // Assuming io is exported
+import { app, server, io } from "./lib/socket.js";
+import groupChatRoutes from "./routes/groupChat.route.js";
+// import userRoutes from "./routes/user.route.js";
+import passwordRoutes from "./routes/password.route.js";
+import aiRoutes from "./routes/ai.route.js";
+import { protectRoute } from "./middleware/auth.middleware.js";
 
 config({ path: ".env" });
 console.log("JWT_SECRET:", process.env.JWT_SECRET);
@@ -23,50 +29,27 @@ app.use(
 
 app.use("/uploads/audio", express.static("uploads/audio"));
 
+// Public routes (no authentication required)
 app.use("/api/auth", authRoutes);
-app.use("/api/messages", messageRoutes);
-app.use("/api", chatRoutes);
+app.use("/api/password", passwordRoutes);
 
-// Socket.IO Signaling for Calls
-const users = new Map(); // userId -> Socket.IO socket
+// Protected routes (apply protectRoute middleware)
+app.use("/api/messages", protectRoute, messageRoutes);
+app.use("/api", protectRoute, chatRoutes);
+app.use("/api/group-chats", protectRoute, groupChatRoutes);
+app.use("/api/users", protectRoute);
+app.use("/api/ai", protectRoute, aiRoutes); // Add the AI route
+
+const connectedUsers = new Map(); // userId -> socketId for chat events
 
 io.on("connection", (socket) => {
-  socket.on("register", (userId) => {
-    users.set(userId, socket);
-    socket.userId = userId;
-    console.log(`User ${userId} registered`);
-  });
-
-  socket.on("call", ({ from, to, channel }) => {
-    const recipient = users.get(to);
-    if (recipient) {
-      recipient.emit("incoming_call", { from, channel });
-      socket.emit("call_initiated");
-    } else {
-      socket.emit("error", { message: "User not found or offline" });
-    }
-  });
-
-  socket.on("accept", ({ from, to, channel }) => {
-    const caller = users.get(to);
-    if (caller) {
-      caller.emit("call_accepted", { from, channel });
-    }
-  });
-
-  socket.on("reject", ({ from, to }) => {
-    const caller = users.get(to);
-    if (caller) {
-      caller.emit("call_rejected", { from });
-    }
-  });
-
-  socket.on("disconnect", () => {
-    if (socket.userId) {
-      users.delete(socket.userId);
-      console.log(`User ${socket.userId} disconnected`);
-    }
-  });
+  const userId = socket.handshake.query.userId;
+  if (userId) {
+    connectedUsers.set(userId, socket.id);
+    console.log(`User ${userId} connected with socket ${socket.id}`);
+    // Emit updated online users to all clients
+    io.emit("online-users", Array.from(connectedUsers.keys()));
+  }
 });
 
 const PORT = process.env.PORT || 5000;
@@ -74,3 +57,5 @@ server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
   connectDB();
 });
+
+export { connectedUsers };

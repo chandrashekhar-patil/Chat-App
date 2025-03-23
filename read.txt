@@ -3,3 +3,139 @@ https://cloud.mongodb.com/v2/67c019bb56b2770240ca3b79#/metrics/replicaSet/67c01a
 https://console.cloudinary.com/settings/c-cfa55b872c5240b4a5d177c066fb65/api-keys
 
 https://daisyui.com/components/button/
+
+React: For building the UI.
+Zustand: For state management (useAuthStore, useChatStore).
+Socket.IO: For real-time communication (e.g., online status, typing indicators, new messages).
+AgoraRTC: For voice and video calls.
+Axios: For making HTTP requests (axiosInstance).
+Framer Motion: For animations (e.g., modals, loading indicators).
+React Hot Toast: For displaying notifications.
+Lucide React: For icons.
+@emoji-mart/react: For the emoji picker.
+Material-UI: For UI components (e.g., IconButton, Menu, LinearProgress).
+
+Displays messages for the selected user or group chat.
+Supports text, image, and audio messages.
+Handles real-time message updates using Socket.IO (subscribeToMessages, unsubscribeFromMessages).
+Includes a play/pause functionality for audio messages with a progress bar.
+Shows a "typing" indicator when the other user is typing.
+Uses useEffect to auto-scroll to the latest message.
+Integrates with MessageInput for sending messages and ChatHeader for displaying the selected user's info.
+
+
+
+// back-end/src/controllers/user.controller.js
+import User from "../models/users.model.js"; // Adjusted to singular "user.model.js" (verify file name)
+import Message from "../models/message.model.js";
+import Chat from "../models/chat.model.js";
+import GroupChat from "../models/groupChat.model.js";
+import { io } from "../lib/socket.js";
+
+export const deleteUser = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const loggedInUser = req.user;
+
+    // Prevent users from deleting themselves
+    if (userId === loggedInUser._id.toString()) {
+      return res
+        .status(400)
+        .json({ message: "You cannot delete your own account from here" });
+    }
+
+    // Find the user to delete
+    const userToDelete = await User.findById(userId);
+    if (!userToDelete) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Delete all messages sent by the user
+    await Message.deleteMany({ senderId: userId });
+
+    // Delete all direct chats involving the user
+    await Chat.deleteMany({
+      $or: [{ user1: userId }, { user2: userId }],
+    });
+
+    // Remove the user from all group chats
+    await GroupChat.updateMany(
+      { members: userId },
+      { $pull: { members: userId } }
+    );
+
+    // Delete any group chats created by the user
+    await GroupChat.deleteMany({ creator: userId });
+
+    // Delete the user
+    await userToDelete.deleteOne();
+
+    // Emit a socket event to notify other users
+    io.emit("userDeleted", { userId });
+
+    res.status(200).json({ message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Error in deleteUser:", error);
+    res.status(500).json({ 
+      message: "Failed to delete user due to a server error", 
+      error: error.message 
+    });
+  }
+};
+
+export const updateUserProfile = async (req, res) => {
+  const userId = req.user._id;
+  const { fullName, email, profilePic } = req.body;
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    user.fullName = fullName || user.fullName;
+    user.email = email || user.email;
+    user.profilePic = profilePic || user.profilePic;
+
+    const updatedUser = await user.save();
+    res.status(200).json(updatedUser);
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to update profile", error: error.message });
+  }
+};
+
+export const getMultipleUsers = async (req, res) => {
+  const { ids } = req.query; // Expecting ?ids=id1,id2,id3
+  if (!ids) return res.status(400).json({ message: "No user IDs provided" });
+
+  try {
+    const userIds = ids.split(",");
+    const users = await User.find({ _id: { $in: userIds } }).select(
+      "-password"
+    ); // Exclude password
+    res.status(200).json(users);
+  } catch (error) {
+    console.error("getMultipleUsers - Error:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to fetch users", error: error.message });
+  }
+};
+
+import express from "express";
+import { protectRoute } from "../middleware/auth.middleware.js";
+import {
+  updateUserProfile,
+  deleteUser,
+  getMultipleUsers,
+} from "../controllers/user.controller.js";
+import { updateProfile } from "../controllers/auth.controller.js";
+
+const router = express.Router();
+
+router.put("/me", protectRoute, updateUserProfile);
+router.get("/multiple", protectRoute, getMultipleUsers);
+router.put("/update-profile", protectRoute, updateProfile);
+router.delete("/:id", protectRoute, deleteUser);
+
+export default router;

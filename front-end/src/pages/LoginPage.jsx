@@ -87,6 +87,12 @@ const LoginPage = () => {
                   )}
                 </button>
               </div>
+              {/* Add Forgot Password Link */}
+              <div className="text-right mt-2">
+                <Link to="/forgot-password" className="link link-primary text-sm">
+                  Forgot Password?
+                </Link>
+              </div>
             </div>
 
             <button
@@ -107,7 +113,7 @@ const LoginPage = () => {
 
           <div className="text-center">
             <p className="text-base-content/60">
-              Don&apos;t have an account?{" "}
+              Don't have an account?{" "}
               <Link to="/signup" className="link link-primary">
                 Create account
               </Link>
@@ -126,4 +132,5 @@ const LoginPage = () => {
     </div>
   );
 };
+
 export default LoginPage;
