@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const axiosInstance = axios.create({
-  baseURL: "https://textspin-chandu-b.vercel.app/api",
+  baseURL: "https://chat-app-back-k05j.onrender.com/api",
   withCredentials: true,
 });
 
