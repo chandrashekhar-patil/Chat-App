@@ -186,10 +186,20 @@ const ChatHeader = ({ selectedUser }) => {
   const isBlocked = !isGroupChat && blockedUsers.includes(selectedUser._id);
   const showOnlineStatus = isOnline && !isBlocked;
 
+  console.log("ChatHeader - selectedUser._id:", selectedUser._id);
+console.log("ChatHeader - onlineUsers:", onlineUsers);
+console.log("ChatHeader - isOnline:", isOnline);
+console.log("ChatHeader - isBlocked:", isBlocked);
+console.log("ChatHeader - showOnlineStatus:", showOnlineStatus);
+
   let statusText = "";
   if (isGroupChat) {
     statusText = `${selectedUser.members.length} members`;
-  } else if (!isOnline && selectedUser.updatedAt && !isBlocked) {
+  } else if (showOnlineStatus) {
+    statusText = "online";
+  } else if (isBlocked) {
+    statusText = "blocked";
+  } else if (selectedUser.updatedAt) {
     statusText = `last seen ${formatDistanceToNow(
       new Date(selectedUser.updatedAt),
       { addSuffix: true }

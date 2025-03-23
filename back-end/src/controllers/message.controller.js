@@ -1,4 +1,3 @@
-// back-end/src/controllers/message.controller.js
 import mongoose from "mongoose";
 import User from "../models/users.model.js";
 import Message from "../models/message.model.js";
@@ -158,11 +157,15 @@ export const sendMessage = async (req, res) => {
         content: text || (imageUrl ? "Image" : "Audio"),
         timestamp: new Date(),
       });
-      console.log(`Notification emitted to receiver ${receiverId}`);
+      console.log(`Notification emitted to receiver ${receiverId} at socket ${receiverSocketId}`);
+    } else {
+      console.log(`Receiver ${receiverId} is offline or not connected`);
     }
 
     if (senderSocketId) {
       io.to(senderSocketId).emit("newMessage", populatedMessage);
+    } else {
+      console.log(`Sender ${senderId} socket not found`);
     }
 
     res.status(201).json(populatedMessage);
@@ -264,9 +267,19 @@ export const sendGroupMessage = async (req, res) => {
           chatId,
           timestamp: new Date(),
         });
-        console.log(`Notification emitted to member ${member._id}`);
+        console.log(`Notification emitted to member ${member._id} at socket ${memberSocketId}`);
+      } else if (!memberSocketId) {
+        console.log(`Member ${member._id} is offline or not connected`);
       }
     });
+
+    // Emit to sender as well
+    const senderSocketId = getReceiverSocketId(senderId.toString());
+    if (senderSocketId) {
+      io.to(senderSocketId).emit("newMessage", populatedMessage);
+    } else {
+      console.log(`Sender ${senderId} socket not found`);
+    }
 
     res.status(201).json(populatedMessage);
   } catch (error) {

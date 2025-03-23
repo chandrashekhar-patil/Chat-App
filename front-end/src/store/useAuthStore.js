@@ -1,4 +1,3 @@
-// front-end/src/store/useAuthStore.js
 import { create } from "zustand";
 import axiosInstance from "../lib/axios";
 import toast from "react-hot-toast";
@@ -39,6 +38,7 @@ export const useAuthStore = create((set, get) => ({
   },
 
   login: async (data) => {
+    set({ isCheckingAuth: true });
     set({ isLoggingIn: true });
     try {
       const res = await axiosInstance.post("/auth/login", data);
@@ -125,7 +125,8 @@ export const useAuthStore = create((set, get) => ({
       window.location.href = "/login";
     } catch (error) {
       set({ isLoading: false });
-      const message = error.response?.data?.message || "Failed to delete account";
+      const message =
+        error.response?.data?.message || "Failed to delete account";
       toast.error(message);
       throw error;
     }
@@ -206,6 +207,8 @@ export const useAuthStore = create((set, get) => ({
 
     newSocket.on("connect", () => {
       console.log("Socket connected:", newSocket.id);
+      // Initialize global socket listeners for chat store
+      useChatStore.getState().initializeSocketListeners();
     });
 
     newSocket.on("connect_error", (error) => {
@@ -218,15 +221,18 @@ export const useAuthStore = create((set, get) => ({
       set({ onlineUsers: userIds || [] });
     });
 
-    newSocket.on("disconnect", () => {
-      console.log("Socket disconnected");
-      set({ onlineUsers: [] });
+    newSocket.on("userOnline", (userId) => {
+      console.log(`User ${userId} is online`);
+      set((state) => ({
+        onlineUsers: [...new Set([...state.onlineUsers, userId])],
+      }));
     });
 
-    newSocket.on("userRemovedFromChat", ({ chatId, userId }) => {
-      console.log(`User ${userId} removed from chat ${chatId}`);
-      useChatStore.getState().removeUserFromChat(chatId, userId);
-      toast.info("A user has left the chat");
+    newSocket.on("userOffline", (userId) => {
+      console.log(`User ${userId} is offline`);
+      set((state) => ({
+        onlineUsers: state.onlineUsers.filter((id) => id !== userId),
+      }));
     });
 
     newSocket.on("userDeleted", ({ userId }) => {
@@ -239,6 +245,17 @@ export const useAuthStore = create((set, get) => ({
       toast.info("A user has deleted their account");
     });
 
+    newSocket.on("userRemovedFromChat", ({ chatId, userId }) => {
+      console.log(`User ${userId} removed from chat ${chatId}`);
+      useChatStore.getState().removeUserFromChat(chatId, userId);
+      toast.info("A user has left the chat");
+    });
+
+    newSocket.on("disconnect", () => {
+      console.log("Socket disconnected");
+      set({ onlineUsers: [] });
+    });
+
     set({ socket: newSocket });
   },
 
@@ -246,8 +263,11 @@ export const useAuthStore = create((set, get) => ({
     const { socket } = get();
     if (socket) {
       socket.off("getOnlineUsers");
+      socket.off("userOnline");
+      socket.off("userOffline");
       socket.off("userRemovedFromChat");
       socket.off("userDeleted");
+      socket.off("disconnect");
       socket.disconnect();
       set({ socket: null, onlineUsers: [], blockedUsers: [] });
       console.log("Socket disconnected and state reset");

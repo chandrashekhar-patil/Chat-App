@@ -1,4 +1,3 @@
-// back-end/src/lib/socket.js
 import { Server } from "socket.io";
 import mongoose from "mongoose";
 import http from "http";
@@ -38,9 +37,19 @@ io.on("connection", (socket) => {
     userSocketMap[userId] = socket.id;
     console.log(`Updated userSocketMap:`, userSocketMap);
     io.emit("getOnlineUsers", Object.keys(userSocketMap));
+    io.emit("userOnline", userId); // Emit userOnline event
   } else {
     console.log("Invalid userId received during socket connection:", userId);
   }
+
+  // Typing event
+  socket.on("typing", (data) => {
+    const { userId, receiverId, typing } = data;
+    const receiverSocketId = getReceiverSocketId(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("typing", { userId, typing });
+    }
+  });
 
   // Call events
   socket.on("call", ({ from, to, channel }) => {
@@ -93,10 +102,11 @@ io.on("connection", (socket) => {
         delete userSocketMap[key];
         console.log(`Removed user ${key} from userSocketMap:`, userSocketMap);
         io.emit("getOnlineUsers", Object.keys(userSocketMap));
+        io.emit("userOffline", key); // Emit userOffline event
         break;
       }
     }
   });
 });
 
-export { app, server, io, getReceiverSocketId };
+export { app, server, io, getReceiverSocketId, userSocketMap };

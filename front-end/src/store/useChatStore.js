@@ -1,4 +1,3 @@
-// front-end/src/store/useChatStore.js
 import { create } from "zustand";
 import toast from "react-hot-toast";
 import axiosInstance from "../lib/axios";
@@ -13,6 +12,279 @@ export const useChatStore = create((set, get) => ({
   isTyping: false,
   isChatCleared: false,
   groupChats: [],
+  unreadCounts: {},
+
+  // Initialize global socket listeners
+  initializeSocketListeners: () => {
+    const socket = useAuthStore.getState().socket;
+    if (!socket) {
+      console.log("Socket not available for global subscription");
+      return;
+    }
+
+    console.log("Initializing global socket listeners");
+
+    // Remove any existing listeners to prevent duplicates
+    socket.off("newMessage");
+    socket.off("notification");
+    socket.off("typing");
+    socket.off("chatCleared");
+    socket.off("groupUpdated");
+    socket.off("groupDeleted");
+    socket.off("userDeleted");
+    socket.off("userRemovedFromChat");
+    socket.off("userOnline");
+    socket.off("userOffline");
+
+    socket.on("newMessage", (message) => {
+      console.log("Global newMessage received:", message);
+      const authUserId = useAuthStore.getState().authUser?._id;
+      const currentSelectedUser = get().selectedUser;
+
+      // Update messages if the message is for the currently selected chat
+      if (currentSelectedUser) {
+        const isGroupChat = currentSelectedUser.isGroupChat;
+        if (isGroupChat) {
+          if (message.chatId === currentSelectedUser._id) {
+            set((state) => {
+              const isDuplicate = state.messages.some(
+                (msg) => msg._id === message._id
+              );
+              if (!isDuplicate) {
+                console.log("Adding new group message to state:", message);
+                return { messages: [...state.messages, message] };
+              }
+              console.log("Duplicate group message ignored:", message._id);
+              return state;
+            });
+          }
+        } else {
+          if (
+            (message.senderId._id === currentSelectedUser._id &&
+              message.receiverId === authUserId) ||
+            (message.senderId._id === authUserId &&
+              message.receiverId === currentSelectedUser._id)
+          ) {
+            set((state) => {
+              const isDuplicate = state.messages.some(
+                (msg) => msg._id === message._id
+              );
+              if (!isDuplicate) {
+                console.log("Adding new message to state:", message);
+                return { messages: [...state.messages, message] };
+              }
+              console.log("Duplicate message ignored:", message._id);
+              return state;
+            });
+          }
+        }
+      }
+
+      // Update lastMessage in users or groupChats
+      set((state) => {
+        if (message.chatId) {
+          // Group chat message
+          return {
+            groupChats: state.groupChats.map((group) =>
+              group._id === message.chatId
+                ? { ...group, lastMessage: message }
+                : group
+            ),
+          };
+        } else {
+          // Direct message
+          const chatUserId =
+            message.senderId._id === authUserId
+              ? message.receiverId
+              : message.senderId._id;
+          return {
+            users: state.users.map((user) =>
+              user._id === chatUserId
+                ? { ...user, lastMessage: message }
+                : user
+            ),
+          };
+        }
+      });
+
+      // Handle notifications for all incoming messages from other users
+      const senderId =
+        typeof message.senderId === "object"
+          ? message.senderId._id
+          : message.senderId;
+      if (senderId !== authUserId) {
+        // Increment unread count only if the message is not from the currently selected chat
+        if (
+          !currentSelectedUser ||
+          (message.chatId && message.chatId !== currentSelectedUser._id) ||
+          (!message.chatId && senderId !== currentSelectedUser._id)
+        ) {
+          const chatId = message.chatId || senderId;
+          console.log("Incrementing unread count for chat (global):", chatId);
+          get().incrementUnreadCount(chatId);
+        }
+
+        // Browser notification for every incoming message
+        if (Notification.permission === "granted") {
+          const senderName = message.senderId.fullName || "Unknown";
+          const content = message.text || (message.image ? "Image" : "Audio");
+          const notification = new Notification(
+            `New Message from ${senderName}`,
+            {
+              body: content,
+              icon: message.senderId.profilePic || "/avatar.png",
+              tag: message._id,
+            }
+          );
+          notification.onclick = () => {
+            window.focus();
+            // Select the chat when the notification is clicked
+            const chatUser = get().users.find((user) => user._id === senderId) || 
+                            get().groupChats.find((group) => group._id === message.chatId);
+            if (chatUser) {
+              get().setSelectedUser(chatUser);
+            }
+          };
+          const audio = new Audio("/notification.mp3");
+          audio
+            .play()
+            .catch((err) => console.error("Audio play error:", err));
+        } else if (Notification.permission === "denied") {
+          toast.error("Notifications are blocked. Please enable them in your browser settings to receive message alerts.");
+        }
+
+        // Toast notification (optional, remove if you only want browser notifications)
+        const senderName = message.senderId.fullName || "Unknown";
+        const content = message.text || (message.image ? "Image" : "Audio");
+        toast.info(`New message from ${senderName}: ${content}`, {
+          duration: 2000,
+          style: { background: "#e0f7fa", color: "#0288d1" },
+        });
+      }
+    });
+
+    socket.on("notification", (notification) => {
+      console.log("Global notification received:", notification);
+      // Since we're handling toast notifications in the newMessage event,
+      // we can optionally keep this for other types of notifications
+    });
+
+    socket.on("typing", (data) => {
+      console.log("Typing event received:", data);
+      const { userId, typing } = data;
+      const authUserId = useAuthStore.getState().authUser?._id;
+      const currentSelectedUser = get().selectedUser;
+      if (
+        currentSelectedUser &&
+        userId === currentSelectedUser._id &&
+        userId !== authUserId
+      ) {
+        set({ isTyping: typing });
+      }
+    });
+
+    socket.on("chatCleared", ({ userId }) => {
+      console.log("Received chatCleared event for userId:", userId);
+      const currentSelectedUser = get().selectedUser;
+      if (currentSelectedUser?._id === userId && !get().isChatCleared) {
+        set({ messages: [], isChatCleared: true });
+        get().resetUnreadCount(userId);
+        toast.success("Chat has been cleared");
+        // Update lastMessage to null for the cleared chat
+        set((state) => ({
+          users: state.users.map((user) =>
+            user._id === userId ? { ...user, lastMessage: null } : user
+          ),
+        }));
+      }
+    });
+
+    socket.on("groupUpdated", (updatedGroup) => {
+      console.log("Group updated:", updatedGroup);
+      const currentSelectedUser = get().selectedUser;
+      if (currentSelectedUser?._id === updatedGroup._id) {
+        set({ selectedUser: updatedGroup });
+      }
+      set((state) => ({
+        groupChats: state.groupChats.map((g) =>
+          g._id === updatedGroup._id ? updatedGroup : g
+        ),
+      }));
+    });
+
+    socket.on("groupDeleted", (groupId) => {
+      console.log("Group deleted:", groupId);
+      const currentSelectedUser = get().selectedUser;
+      if (currentSelectedUser?._id === groupId) {
+        set({ selectedUser: null, messages: [] });
+      }
+      set((state) => ({
+        groupChats: state.groupChats.filter((g) => g._id !== groupId),
+        unreadCounts: {
+          ...state.unreadCounts,
+          [groupId]: 0,
+        },
+      }));
+    });
+
+    socket.on("userDeleted", (data) => {
+      console.log("Received userDeleted event for userId:", data.userId);
+      const currentSelectedUser = get().selectedUser;
+      set((state) => {
+        const updatedUsers = state.users.filter(
+          (user) => user._id !== data.userId
+        );
+        const updatedSelectedUser =
+          currentSelectedUser?._id === data.userId ? null : currentSelectedUser;
+
+        toast(`User has deleted their account.`, {
+          style: { background: "#e0f7fa", color: "#0288d1" },
+        });
+
+        return {
+          users: updatedUsers,
+          selectedUser: updatedSelectedUser,
+          unreadCounts: {
+            ...state.unreadCounts,
+            [data.userId]: 0,
+          },
+        };
+      });
+    });
+
+    socket.on("userRemovedFromChat", ({ chatId, userId }) => {
+      console.log(`User ${userId} removed from chat ${chatId}`);
+      get().removeUserFromChat(chatId, userId);
+      toast.info("A user has left the chat");
+    });
+
+    // Handle userOnline and userOffline to update selectedUser and users
+    socket.on("userOnline", (userId) => {
+      console.log(`userOnline event in useChatStore - userId: ${userId}`);
+      const currentSelectedUser = get().selectedUser;
+      if (currentSelectedUser && !currentSelectedUser.isGroupChat && currentSelectedUser._id === userId) {
+        set((state) => ({
+          selectedUser: { ...state.selectedUser, isOnline: true },
+          users: state.users.map((user) =>
+            user._id === userId ? { ...user, isOnline: true } : user
+          ),
+        }));
+      }
+    });
+
+    socket.on("userOffline", (userId) => {
+      console.log(`userOffline event in useChatStore - userId: ${userId}`);
+      const currentSelectedUser = get().selectedUser;
+      if (currentSelectedUser && !currentSelectedUser.isGroupChat && currentSelectedUser._id === userId) {
+        set((state) => ({
+          selectedUser: { ...state.selectedUser, isOnline: false, updatedAt: new Date() },
+          users: state.users.map((user) =>
+            user._id === userId ? { ...user, isOnline: false, updatedAt: new Date() } : user
+          ),
+        }));
+      }
+    });
+  },
 
   createGroupChat: async (groupData) => {
     try {
@@ -134,7 +406,6 @@ export const useChatStore = create((set, get) => ({
       const res = await axiosInstance.post(endpoint, data, { headers });
       console.log("sendMessage - Success Response:", res.data);
 
-      // Add the sent message to the local state (for the sender)
       const newMessage = res.data;
       set((state) => {
         const isDuplicate = state.messages.some(
@@ -183,157 +454,38 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
+  incrementUnreadCount: (chatId) => {
+    set((state) => ({
+      unreadCounts: {
+        ...state.unreadCounts,
+        [chatId]: (state.unreadCounts[chatId] || 0) + 1,
+      },
+    }));
+  },
+
+  resetUnreadCount: (chatId) => {
+    set((state) => ({
+      unreadCounts: {
+        ...state.unreadCounts,
+        [chatId]: 0,
+      },
+    }));
+  },
+
   subscribeToMessages: () => {
-    const { selectedUser } = get();
-    if (!selectedUser) {
-      console.log("No selected user, cannot subscribe to messages");
-      return;
-    }
-
-    const socket = useAuthStore.getState().socket;
-    if (!socket) {
-      console.log("Socket not available for subscription");
-      return;
-    }
-
-    console.log("Subscribing to messages for user:", selectedUser._id);
-
-    socket.off("newMessage"); // Remove previous listeners to avoid duplicates
-    socket.off("typing");
-    socket.off("chatCleared");
-    socket.off("groupUpdated");
-    socket.off("groupDeleted");
-    socket.off("userDeleted");
-
-    socket.on("newMessage", (newMessage) => {
-      console.log("Received newMessage:", newMessage);
-      const authUserId = useAuthStore.getState().authUser?._id;
-      const isGroupChat = selectedUser.isGroupChat;
-
-      if (isGroupChat) {
-        // Handle group chat messages
-        if (newMessage.chatId === selectedUser._id) {
-          set((state) => {
-            const isDuplicate = state.messages.some(
-              (msg) => msg._id === newMessage._id
-            );
-            if (!isDuplicate) {
-              console.log("Adding new group message to state:", newMessage);
-              return { messages: [...state.messages, newMessage] };
-            }
-            console.log("Duplicate group message ignored:", newMessage._id);
-            return state;
-          });
-        } else {
-          console.log("Group message not for this chat:", newMessage.chatId);
-        }
-      } else {
-        // Handle individual chat messages
-        if (
-          (newMessage.senderId._id === selectedUser._id &&
-            newMessage.receiverId === authUserId) ||
-          (newMessage.senderId._id === authUserId &&
-            newMessage.receiverId === selectedUser._id)
-        ) {
-          set((state) => {
-            const isDuplicate = state.messages.some(
-              (msg) => msg._id === newMessage._id
-            );
-            if (!isDuplicate) {
-              console.log("Adding new message to state:", newMessage);
-              return { messages: [...state.messages, newMessage] };
-            }
-            console.log("Duplicate message ignored:", newMessage._id);
-            return state;
-          });
-        } else {
-          console.log("Message not relevant to current chat:", newMessage);
-        }
-      }
-    });
-
-    socket.on("typing", (data) => {
-      console.log("Typing event received:", data);
-      const { userId, typing } = data;
-      const authUserId = useAuthStore.getState().authUser?._id;
-      if (userId === selectedUser._id && userId !== authUserId) {
-        set({ isTyping: typing });
-      }
-    });
-
-    socket.on("chatCleared", ({ userId }) => {
-      console.log("Received chatCleared event for userId:", userId);
-      if (selectedUser._id === userId && !get().isChatCleared) {
-        set({ messages: [], isChatCleared: true });
-        toast.success("Chat has been cleared");
-      }
-    });
-
-    socket.on("groupUpdated", (updatedGroup) => {
-      console.log("Group updated:", updatedGroup);
-      if (selectedUser._id === updatedGroup._id) {
-        set({ selectedUser: updatedGroup });
-      }
-      set((state) => ({
-        groupChats: state.groupChats.map((g) =>
-          g._id === updatedGroup._id ? updatedGroup : g
-        ),
-      }));
-    });
-
-    socket.on("groupDeleted", (groupId) => {
-      console.log("Group deleted:", groupId);
-      if (selectedUser._id === groupId) {
-        set({ selectedUser: null, messages: [] });
-      }
-      set((state) => ({
-        groupChats: state.groupChats.filter((g) => g._id !== groupId),
-      }));
-    });
-
-    socket.on("userDeleted", (data) => {
-      console.log("Received userDeleted event for userId:", data.userId);
-      set((state) => {
-        const updatedUsers = state.users.filter(
-          (user) => user._id !== data.userId
-        );
-        const updatedSelectedUser =
-          state.selectedUser?._id === data.userId ? null : state.selectedUser;
-
-        toast(`User has deleted their account.`, {
-          style: { background: "#e0f7fa", color: "#0288d1" },
-        });
-
-        console.log("Updated users after deletion:", updatedUsers);
-
-        return {
-          users: updatedUsers,
-          selectedUser: updatedSelectedUser,
-        };
-      });
-    });
+    console.log("subscribeToMessages is now handled globally");
   },
 
   unsubscribeFromMessages: () => {
-    const socket = useAuthStore.getState().socket;
-    if (socket) {
-      socket.off("newMessage");
-      socket.off("typing");
-      socket.off("chatCleared");
-      socket.off("groupUpdated");
-      socket.off("groupDeleted");
-      socket.off("userDeleted");
-      console.log("Unsubscribed from all socket events");
-    }
+    console.log("Unsubscribe not needed with global listeners");
   },
 
   setSelectedUser: (selectedUser) => {
     set({ selectedUser, isTyping: false, isChatCleared: false });
     if (selectedUser) {
       get().getMessages(selectedUser._id);
-      get().subscribeToMessages();
+      get().resetUnreadCount(selectedUser._id); // Reset unread count when viewing chat
     } else {
-      get().unsubscribeFromMessages();
       set({ messages: [], isChatCleared: false });
     }
   },
@@ -388,6 +540,10 @@ export const useChatStore = create((set, get) => ({
         groupChats: state.groupChats.filter((g) => g._id !== groupId),
         selectedUser:
           state.selectedUser?._id === groupId ? null : state.selectedUser,
+        unreadCounts: {
+          ...state.unreadCounts,
+          [groupId]: 0,
+        },
       }));
     } catch (error) {
       console.error("Error deleting group chat:", error);
@@ -435,6 +591,10 @@ export const useChatStore = create((set, get) => ({
             ),
           }
         : null,
+      unreadCounts: {
+        ...state.unreadCounts,
+        [userId]: 0,
+      },
     }));
   },
 }));

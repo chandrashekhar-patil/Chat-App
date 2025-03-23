@@ -1,4 +1,3 @@
-// components/Sidebar.js
 import { useEffect, useState } from "react";
 import { useChatStore } from "../store/useChatStore";
 import { useAuthStore } from "../store/useAuthStore";
@@ -15,7 +14,7 @@ const Sidebar = () => {
     isUsersLoading,
     groupChats,
     getGroupChats,
-    messages, // Add messages to get last message
+    unreadCounts,
   } = useChatStore();
   const { onlineUsers } = useAuthStore();
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
@@ -30,15 +29,6 @@ const Sidebar = () => {
   const filteredUsers = showOnlineOnly
     ? users.filter((user) => onlineUsers.includes(user._id))
     : users;
-
-  const getLastMessageForChat = (chat) => {
-    return messages.find(
-      (m) =>
-        (chat.isGroupChat && m.chatId === chat._id) ||
-        (!chat.isGroupChat &&
-          (m.receiverId === chat._id || m.senderId === chat._id))
-    );
-  };
 
   if (isUsersLoading) return <SidebarSkeleton />;
 
@@ -108,7 +98,7 @@ const Sidebar = () => {
           {/* Individual Users */}
           <div className="px-5 text-white font-semibold">Direct Messages</div>
           {filteredUsers.map((user) => {
-            const lastMessage = getLastMessageForChat(user);
+            const lastMessage = user.lastMessage;
             return (
               <button
                 key={user._id}
@@ -137,10 +127,18 @@ const Sidebar = () => {
                   <span className="font-medium truncate text-white text-lg">
                     {user.fullName}
                   </span>
-                  <span className="text-sm text-gray-400 truncate">
-                    {/* {lastMessage ? lastMessage.text || "Media" : "No messages"} */}
-                    <span class="indicator-item badge badge-secondary">12</span>
-                  </span>
+                  <div className="flex items-center">
+                    <span className="text-sm text-gray-400 truncate">
+                      {lastMessage
+                        ? lastMessage.text || "Media"
+                        : "No messages"}
+                    </span>
+                    {(unreadCounts[user._id] || 0) > 0 && (
+                      <span className="ml-2 px-1.5 py-0.5 text-xs bg-red-500 text-white rounded-full min-w-[20px] text-center">
+                        {unreadCounts[user._id]}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </button>
             );
@@ -149,10 +147,10 @@ const Sidebar = () => {
           {/* Group Chats */}
           <div className="px-5 text-white font-semibold mt-4">Group Chats</div>
           {groupChats.map((group) => {
-            const lastMessage = getLastMessageForChat(group);
+            const lastMessage = group.lastMessage;
             const senderName =
               lastMessage && group.members
-                ? group.members.find((m) => m._id === lastMessage.senderId)
+                ? group.members.find((m) => m._id === lastMessage.senderId?._id)
                     ?.fullName || "Unknown"
                 : "";
             return (
@@ -180,11 +178,18 @@ const Sidebar = () => {
                   <span className="font-medium truncate text-white text-lg">
                     {group.name}
                   </span>
-                  <span className="text-sm text-gray-400 truncate">
-                    {lastMessage
-                      ? `${senderName}: ${lastMessage.text || "Media"}`
-                      : "No messages"}
-                  </span>
+                  <div className="flex items-center">
+                    <span className="text-sm text-gray-400 truncate">
+                      {lastMessage
+                        ? `${senderName}: ${lastMessage.text || "Media"}`
+                        : "No messages"}
+                    </span>
+                    {(unreadCounts[group._id] || 0) > 0 && (
+                      <span className="ml-2 px-1.5 py-0.5 text-xs bg-red-500 text-white rounded-full min-w-[20px] text-center">
+                        {unreadCounts[group._id]}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </button>
             );
