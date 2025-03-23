@@ -45,7 +45,7 @@ export const useAuthStore = create((set, get) => ({
       console.log("login - Success:", res.data);
       set({ authUser: res.data });
       get().connectSocket();
-      await get().fetchBlockedUsers();
+      await get().fetchBlockedUsers(); // Ensure this runs after login
       toast.success("Logged in successfully");
       return res.data;
     } catch (error) {
@@ -167,13 +167,14 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  fetchBlockedUsers: async () => {
+ fetchBlockedUsers: async () => {
     try {
+      console.log("Fetching blocked users...");
       const res = await axiosInstance.get("/blocked-users");
       set({ blockedUsers: res.data.blockedUsers || [] });
       console.log("fetchBlockedUsers - Success:", res.data);
     } catch (error) {
-      console.error("fetchBlockedUsers - Error:", error.response?.data);
+      console.error("fetchBlockedUsers - Error:", error.response?.data || error.message);
       set({ blockedUsers: [] });
       toast.error("Failed to fetch blocked users");
     }
