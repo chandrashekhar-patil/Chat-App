@@ -5,7 +5,7 @@ import messageRoutes from "./routes/message.route.js";
 import chatRoutes from "./routes/chat.route.js";
 import cookieParser from "cookie-parser";
 import express from "express";
-import cors from "cors"; // Add this import
+import cors from "cors";
 import { app, server } from "./lib/socket.js";
 import groupChatRoutes from "./routes/groupChat.route.js";
 import passwordRoutes from "./routes/password.route.js";
@@ -14,13 +14,21 @@ import { protectRoute } from "./middleware/auth.middleware.js";
 
 config({ path: ".env" });
 
-// Replace your manual CORS setup with the cors middleware
-app.use(cors({
+// Apply proper CORS configuration
+const corsOptions = {
   origin: "https://textspin-chandu.vercel.app",
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
-}));
+};
+
+// Apply CORS middleware before any other middleware
+app.use(cors(corsOptions));
+
+// Also handle OPTIONS requests explicitly
+app.options('*', cors(corsOptions));
+
+// Remove your previous manual CORS handler
 
 console.log("JWT_SECRET:", process.env.JWT_SECRET);
 app.use(express.json({ limit: "30mb" }));
@@ -28,11 +36,9 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use(cookieParser());
 app.use("/uploads/audio", express.static("uploads/audio"));
 
-// Public routes (no authentication required)
+// Routes remain the same
 app.use("/api/auth", authRoutes);
 app.use("/api/password", passwordRoutes);
-
-// Protected routes (apply protectRoute middleware)
 app.use("/api/messages", protectRoute, messageRoutes);
 app.use("/api", protectRoute, chatRoutes);
 app.use("/api/group-chats", protectRoute, groupChatRoutes);
