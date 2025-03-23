@@ -200,9 +200,9 @@ export const useAuthStore = create((set, get) => ({
       return;
     }
 
-    const newSocket = io("http://localhost:5000", {
-      query: { userId: authUser._id },
-      withCredentials: true,
+   const newSocket = io("https://chat-app-back-k05j.onrender.com", {
+   query: { userId: authUser._id },
+   withCredentials: true,
     });
 
     newSocket.on("connect", () => {
