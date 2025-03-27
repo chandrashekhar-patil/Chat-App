@@ -12,7 +12,6 @@ import passwordRoutes from "./routes/password.route.js";
 import aiRoutes from "./routes/ai.route.js";
 import { protectRoute } from "./middleware/auth.middleware.js";
 
-config({ path: ".env" });
 
 // Apply proper CORS configuration
 const corsOptions = {
@@ -22,31 +21,28 @@ const corsOptions = {
   allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
 };
 
-// Apply CORS middleware before any other middleware
-app.use(cors(corsOptions));
+config({ path: ".env" });
 
-// Also handle OPTIONS requests explicitly
+
+app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Remove your previous manual CORS handler
-
-console.log("JWT_SECRET:", process.env.JWT_SECRET);
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use(cookieParser());
 app.use("/uploads/audio", express.static("uploads/audio"));
 
-// Routes remain the same
-app.use("/api/auth", authRoutes);
+// Routes
+app.use("/api/auth", authRoutes); // Handles /api/auth/signup, /api/auth/login, etc.
 app.use("/api/password", passwordRoutes);
 app.use("/api/messages", protectRoute, messageRoutes);
 app.use("/api", protectRoute, chatRoutes);
 app.use("/api/group-chats", protectRoute, groupChatRoutes);
-app.use("/api/users", protectRoute);
+app.use("/api/users", authRoutes); // Add this line to handle /api/users/update-profile
 app.use("/api/ai", protectRoute, aiRoutes);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
   connectDB();
-});
+}); 
