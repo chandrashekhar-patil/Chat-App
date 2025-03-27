@@ -41,3 +41,4 @@ export const chatWithAI = async (req, res) => {
     res.status(status).json({ error: errorMsg, details: error.message });
   }
 };
+//ai
