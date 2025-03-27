@@ -12,8 +12,8 @@ import passwordRoutes from "./routes/password.route.js";
 import aiRoutes from "./routes/ai.route.js";
 import { protectRoute } from "./middleware/auth.middleware.js";
 
+config({ path: ".env" });
 
-// Apply proper CORS configuration
 const corsOptions = {
   origin: "https://textspin-chandu.vercel.app",
   credentials: true,
@@ -21,11 +21,8 @@ const corsOptions = {
   allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
 };
 
-config({ path: ".env" });
-
-
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.options('https://textspin-chandu.vercel.app', cors(corsOptions));
 
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
