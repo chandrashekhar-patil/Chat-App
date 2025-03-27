@@ -30,7 +30,7 @@ app.use(cookieParser());
 app.use("/uploads/audio", express.static("uploads/audio"));
 
 // Routes
-app.use("/api/auth", authRoutes); // Handles /api/auth/signup, /api/auth/login, etc.
+app.use("/api/auth", authRoutes); 
 app.use("/api/password", passwordRoutes);
 app.use("/api/messages", protectRoute, messageRoutes);
 app.use("/api", protectRoute, chatRoutes);
