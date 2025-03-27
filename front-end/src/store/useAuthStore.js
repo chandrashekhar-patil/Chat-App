@@ -45,7 +45,7 @@ export const useAuthStore = create((set, get) => ({
       console.log("login - Success:", res.data);
       set({ authUser: res.data });
       get().connectSocket();
-      await get().fetchBlockedUsers(); // Ensure this runs after login
+      await get().fetchBlockedUsers(); 
       toast.success("Logged in successfully");
       return res.data;
     } catch (error) {
@@ -88,13 +88,13 @@ export const useAuthStore = create((set, get) => ({
       set({ authUser: null, blockedUsers: [], onlineUsers: [], socket: null });
       get().disconnectSocket();
       toast.success("Logged out successfully");
-      window.location.href = "/login";
+      window.location.href = "/";
     } catch (error) {
       toast.error(error.response?.data?.message || "Logout failed");
     }
   },
 
-  updateProfile: async (data) => {
+  updateProfile: async (data) => {a
     set({ isUpdatingProfile: true });
     try {
       const res = await axiosInstance.put("/users/update-profile", data);
@@ -208,7 +208,6 @@ export const useAuthStore = create((set, get) => ({
 
     newSocket.on("connect", () => {
       console.log("Socket connected:", newSocket.id);
-      // Initialize global socket listeners for chat store
       useChatStore.getState().initializeSocketListeners();
     });
 
