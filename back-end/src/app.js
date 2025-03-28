@@ -15,13 +15,10 @@ import { protectRoute } from "./middleware/auth.middleware.js";
 
 config({ path: ".env" }); 
 
-// CORS configuration for Express
-const corsOptions = {
-  origin: "https://textspin-chandu.vercel.app", 
+app.use(cors({
+  origin: "https://textspin-chandu.vercel.app",
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], 
-  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"], 
-};
+}));
 
 app.use(cors(corsOptions)); // Apply CORS to all routes
 app.options("*", cors(corsOptions)); // Handle preflight OPTIONS requests for all routes
