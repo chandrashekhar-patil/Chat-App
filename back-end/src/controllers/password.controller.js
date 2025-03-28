@@ -10,8 +10,8 @@ const createTransporter = () =>
   nodemailer.createTransport({
     service: "gmail",
     auth: {
-      user: process.env.EMAIL_USER, // Updated to match your working version
-      pass: process.env.EMAIL_PASS, // Updated to match your working version
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
     },
   });
 
@@ -19,7 +19,6 @@ export const forgotPassword = async (req, res) => {
   const { email } = req.body;
   console.log("Received password reset request for email:", email);
 
-  // Basic email validation
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
     return res.status(400).json({ error: "Invalid email format" });
   }
@@ -27,23 +26,20 @@ export const forgotPassword = async (req, res) => {
   try {
     const user = await User.findOne({ email });
 
-    // Avoid email enumeration
     if (!user) {
       return res.status(200).json({ message: "If this email exists, a reset link has been sent." });
     }
 
-    // Generate a secure token with JWT
     const token = crypto.randomBytes(32).toString("hex");
     const resetToken = jwt.sign({ token }, process.env.JWT_SECRET, { expiresIn: "1h" });
     console.log("Generated reset token:", resetToken);
 
-    // Set token and expiry
     user.resetToken = resetToken;
     user.tokenExpiry = Date.now() + 3600000; // 1 hour expiry
     await user.save();
 
-    // Use configurable APP_URL or default to localhost
-    const resetLink = `${process.env.APP_URL || "http://localhost:5173"}/reset-password/update?token=${resetToken}`;
+    // Updated reset link for Vercel API route
+    const resetLink = `${process.env.APP_URL || "https://textspin-chandu.vercel.app"}/reset-password?token=${resetToken}`;
 
     try {
       const transporter = createTransporter();
@@ -76,16 +72,12 @@ export const resetPassword = async (req, res) => {
   const { token, new_password } = req.body;
   console.log("Reset request received for token:", token);
 
-  // Basic input validation
   if (!token || !new_password || new_password.length < 8) {
     return res.status(400).json({ error: "Invalid token or password (min 8 characters)" });
   }
 
   try {
-    // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // Find user with valid token and non-expired expiry
     const user = await User.findOne({
       resetToken: token,
       tokenExpiry: { $gt: Date.now() },
@@ -95,10 +87,9 @@ export const resetPassword = async (req, res) => {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
-    // Hash the new password
     user.password = await bcrypt.hash(new_password, 12);
-    user.resetToken = null; // Invalidate token
-    user.tokenExpiry = null; // Clear expiry
+    user.resetToken = null;
+    user.tokenExpiry = null;
     await user.save();
 
     return res.status(200).json({ message: "Password reset successful" });
