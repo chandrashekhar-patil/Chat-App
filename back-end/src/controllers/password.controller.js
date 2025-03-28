@@ -1,4 +1,3 @@
-// back-end/src/controllers/password.controller.js
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
@@ -37,7 +36,7 @@ export const forgotPassword = async (req, res) => {
     user.tokenExpiry = Date.now() + 3600000;
     await user.save();
 
-    // Updated reset link to match frontend route
+    // Reset link matches frontend route
     const resetLink = `${process.env.APP_URL || "https://textspin-chandu.vercel.app"}/reset?token=${resetToken}`;
 
     try {
