@@ -36,8 +36,8 @@ export const forgotPassword = async (req, res) => {
     user.tokenExpiry = Date.now() + 3600000;
     await user.save();
 
-    // Reset link matches frontend route
-    const resetLink = `${process.env.APP_URL || "https://textspin-chandu.vercel.app"}/reset?token=${resetToken}`;
+    // Point to Vercel frontend
+    const resetLink = `${process.env.FRONTEND_URL || "https://textspin-chandu.vercel.app"}/reset?token=${resetToken}`;
 
     try {
       const transporter = createTransporter();
