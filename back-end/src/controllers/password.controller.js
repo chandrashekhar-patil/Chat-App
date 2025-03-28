@@ -5,7 +5,6 @@ import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import User from "../models/users.model.js";
 
-// Reusable transporter configuration
 const createTransporter = () =>
   nodemailer.createTransport({
     service: "gmail",
@@ -35,11 +34,11 @@ export const forgotPassword = async (req, res) => {
     console.log("Generated reset token:", resetToken);
 
     user.resetToken = resetToken;
-    user.tokenExpiry = Date.now() + 3600000; // 1 hour expiry
+    user.tokenExpiry = Date.now() + 3600000;
     await user.save();
 
-    // Updated reset link for Vercel API route
-    const resetLink = `${process.env.APP_URL || "https://textspin-chandu.vercel.app"}/reset-password?token=${resetToken}`;
+    // Updated reset link to match frontend route
+    const resetLink = `${process.env.APP_URL || "https://textspin-chandu.vercel.app"}/reset?token=${resetToken}`;
 
     try {
       const transporter = createTransporter();
