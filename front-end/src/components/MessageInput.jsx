@@ -24,6 +24,14 @@ const MessageInput = () => {
   const streamRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { // Allow Shift+Enter for new lines if desired
+      e.preventDefault(); // Prevent form submission/new line
+      handleSendTextOrImage(e);
+    }
+  };
+
   const { sendMessage, selectedUser, setTypingStatus, groupChats } =
     useChatStore();
   const { authUser, blockedUsers } = useAuthStore();
@@ -295,6 +303,7 @@ const MessageInput = () => {
           setText(e.target.value);
           handleTyping();
         }}
+        onKeyPress={handleKeyPress}
         disabled={
           isRecording ||
           isSending ||
