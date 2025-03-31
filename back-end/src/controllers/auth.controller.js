@@ -77,12 +77,23 @@ export const signup = async (req, res) => {
 
 export const logout = (req, res) => {
   const token = req.cookies.jwt;
+
   if (token) {
-    tokenCache.set(token, true, 60 * 60); // Cache for 1 hour (token expiry time)
+    tokenCache.set(token, true, 60 * 60);  // Invalidate token for 1 hour
   }
-  res.cookie("jwt", "", { maxAge: 0 });
+
+  // 🛠️ Properly clear the JWT cookie
+  res.cookie("jwt", "", {
+    httpOnly: true,                          // Protect against XSS attacks
+    secure: process.env.NODE_ENV === "production",  // Use secure cookie in production (HTTPS)
+    sameSite: "None",                        // Allow cross-origin cookie clearing
+    expires: new Date(0),                    // Expire the cookie immediately
+    path: "/",                               // Clear cookie from all paths
+  });
+
   res.status(200).json({ message: "Logged out successfully" });
 };
+
 
 export const updateProfile = async (req, res) => {
   const { profilePic } = req.body;
