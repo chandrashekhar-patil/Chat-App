@@ -199,7 +199,7 @@ export const useAuthStore = create((set, get) => ({
     if (socket?.connected) {
       console.log("Socket already connected:", socket.id);
       return;
-    }
+    } 
 
    const newSocket = io("https://chat-app-back-k05j.onrender.com", {
    query: { userId: authUser._id },
@@ -208,6 +208,7 @@ export const useAuthStore = create((set, get) => ({
 
     newSocket.on("connect", () => {
       console.log("Socket connected:", newSocket.id);
+      // Initialize global socket listeners for chat store
       useChatStore.getState().initializeSocketListeners();
     });
 
